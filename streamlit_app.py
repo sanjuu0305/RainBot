@@ -57,4 +57,3 @@ st.markdown('---') st.caption('This demo uses mocked radar + model. Replace fetc
 
 st.markdown("### Helpful files & deploy notes") st.markdown("- requirements.txt and a short README.md are provided in the repository. Push to GitHub and connect to Streamlit Community Cloud for automatic deploy.")
 
------------------- End of streamlit_app.py ------------------
