@@ -1,59 +1,368 @@
-streamlit_app.py
+# streamlit_app.py
+import streamlit as st
+from streamlit_lottie import st_lottie
+import json
+from geopy.geocoders import Nominatim
+import requests
+from datetime import datetime, timedelta
+import google.generativeai as genai
+import pandas as pd
+import plotly.graph_objects as go
+import numpy as np
+import time
+import os
 
-""" Local AI-based Nowcast Streamlit App (mocked) — Single-file app you can run and deploy to Streamlit Community Cloud via GitHub.
+# Optional ONNX runtime import (only if you plan to use ONNX)
+try:
+    import onnxruntime as ort
+    ONNX_AVAILABLE = True
+except Exception:
+    ONNX_AVAILABLE = False
 
-Files included in this document (create these in your repo):
+# ----------------- Gemini Setup -----------------
+# NOTE: You already included an API key in your snippet. Keep secure in environment vars for production.
+genai.configure(api_key="AIzaSyA28UIrLIfgi6fTATjQTZueAKpSe-P2FDo")
+model = genai.GenerativeModel("models/gemini-1.5-flash")
 
-streamlit_app.py            (this file)
+# ----------------- Load Local Lottie Animation -----------------
+def load_lottie_file(filepath: str):
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
-requirements.txt           (below)
+hello_animation = load_lottie_file("hello_animation.json")  # 👈 Must be in same folder (optional)
 
-README.md                  (deploy instructions below)
+# ----------------- Utility Functions -----------------
+def get_coordinates(location_name):
+    geolocator = Nominatim(user_agent="farm-advisor")
+    location = geolocator.geocode(location_name)
+    if location:
+        return location.latitude, location.longitude
+    return None, None
 
+def get_past_weather(lat, lon):
+    end_date = datetime.utcnow().date() - timedelta(days=1)
+    start_date = end_date - timedelta(days=9)
+    url = (
+        f"https://archive-api.open-meteo.com/v1/archive?"
+        f"latitude={lat}&longitude={lon}"
+        f"&start_date={start_date}&end_date={end_date}"
+        f"&daily=precipitation_sum,temperature_2m_max,temperature_2m_min"
+        f"&timezone=auto"
+    )
+    r = requests.get(url, timeout=10)
+    return r.json().get("daily", {})
 
-NOTE: The app contains mocked data-fetch and model-run functions. Replace fetch_local_radar_frames() and run_model() with real implementations that load local radar tiles and your trained model (ONNX / Torch / TF). """
+def get_future_weather(lat, lon):
+    url = (
+        f"https://api.open-meteo.com/v1/forecast?"
+        f"latitude={lat}&longitude={lon}"
+        f"&daily=precipitation_sum,temperature_2m_max,temperature_2m_min"
+        f"&forecast_days=10&timezone=auto"
+    )
+    r = requests.get(url, timeout=10)
+    return r.json().get("daily", {})
 
-import streamlit as st import numpy as np import time from datetime import datetime import matplotlib.pyplot as plt from matplotlib.colors import ListedColormap import base64
+def get_soil_data(lat, lon):
+    try:
+        # Sample static soil data. Replace with actual API call if available.
+        return {
+            "phh2o": 6.5,
+            "ocd": 25.3,
+            "sand": 45,
+            "silt": 30,
+            "clay": 25,
+            "cec": 18.2
+        }
+    except:
+        return None
 
-st.set_page_config(page_title="Local Rain Nowcast", layout="wide")
+def safe_avg(values):
+    clean = [v for v in values if v is not None]
+    return sum(clean) / len(clean) if clean else 0
 
------------------- App header ------------------
+def safe_sum(values):
+    return sum([v for v in values if v is not None])
 
-st.title("Local-area AI Rain Nowcast (Demo)") st.markdown("Quick demo Streamlit app for local nowcasting. Replace mocked data/model with real code.")
+def get_advice(location, past_weather, future_weather, soil, user_query, language):
+    prompt = f"""
+You are a smart agriculture advisor and experienced farmer helping a farmer in {location}.
+Speak in {language}. Respond in a short, simple, farmer-friendly tone.
 
------------------- Sidebar settings ------------------
+**Past 10 Days:**
+- Rain: {safe_sum(past_weather.get('precipitation_sum', [])):.1f} mm
+- Avg Max Temp: {safe_avg(past_weather.get('temperature_2m_max', [])):.1f}°C
+- Avg Min Temp: {safe_avg(past_weather.get('temperature_2m_min', [])):.1f}°C
 
-st.sidebar.header("Nowcast settings") lat = st.sidebar.number_input("Latitude", value=23.0225, format="%.6f") lon = st.sidebar.number_input("Longitude", value=72.5714, format="%.6f") resolution_km = st.sidebar.selectbox("Grid resolution (km)", [0.5, 1.0, 2.0], index=1) cadence_min = st.sidebar.selectbox("Temporal cadence (min)", [1, 5, 10], index=1) frames = st.sidebar.slider("Input frames (history)", min_value=6, max_value=24, value=12) lead_minutes = st.sidebar.slider("Forecast lead (minutes)", min_value=15, max_value=120, value=60, step=15) run_button = st.sidebar.button("Run nowcast")
+**Next 10 Days (Forecast):**
+- Rain: {safe_sum(future_weather.get('precipitation_sum', [])):.1f} mm
+- Avg Max Temp: {safe_avg(future_weather.get('temperature_2m_max', [])):.1f}°C
+- Avg Min Temp: {safe_avg(future_weather.get('temperature_2m_min', [])):.1f}°C
 
-st.sidebar.markdown("---") st.sidebar.markdown("Deployment: Push this repo to GitHub and connect to Streamlit Community Cloud. See README in repo.")
+Soil:
+- pH: {soil['phh2o']}
+- Organic Carbon: {soil['ocd']}
+- Texture: {soil['sand']}% sand, {soil['silt']}% silt, {soil['clay']}% clay
 
------------------- Mocked data/model functions ------------------
+Farmer's Question: '{user_query}'
+"""
+    response = model.generate_content(prompt)
+    return response.text.strip()
 
-@st.cache_data(ttl=30) def fetch_local_radar_frames_mock(lat, lon, frames=12, H=128, W=128): """Return mocked radar frames as (frames, H, W) numpy array with values 0..1. Replace with real fetch from your local radar tiles, reprojected to local grid.""" rng = np.random.default_rng(seed=int((lat+lon)1e4) % 2**31) base = rng.random((frames, H, W)) * 0.2 n    # add a synthetic moving blob to simulate a rain cell for t in range(frames): cx = int(H0.3 + t0.5) cy = int(W0.4 + t0.7) rr = 12 Y, X = np.ogrid[:H, :W] mask = ((X-cx)**2 + (Y-cy)**2) <= rrrr base[t][mask] += 0.7 * np.exp(-t/frames) return np.clip(base, 0.0, 1.0).astype('float32')
-
-@st.cache_resource def load_mock_model(): """Return a placeholder 'model' object. Replace by loading your real model (torch/onnx/tf).""" return {"name": "mock-model"}
-
-def run_model_mock(model, frames_array, leads=12): """Mock inference: advect and blur frames to create probability maps of shape (leads, H, W). Replace with actual model inference that outputs probabilistic precipitation maps.""" frames, H, W = frames_array.shape out = np.zeros((leads, H, W), dtype='float32') last = frames_array[-1] for i in range(leads): shift = i * 2  # advect out[i] = np.roll(last, shift=shift, axis=1) out[i] = gaussian_blur(out[i], sigma=1 + i*0.2) out = np.clip(out, 0.0, 1.0) return out
-
------------------- Small helpers ------------------
-
+# ---------------- Nowcast helpers (mock + ONNX support) ----------------
 from scipy.ndimage import gaussian_filter
 
-def gaussian_blur(img, sigma=1.0): return gaussian_filter(img, sigma=sigma)
+def gaussian_blur(img, sigma=1.0):
+    return gaussian_filter(img, sigma=sigma)
 
-def plot_heatmap(prob_map, title="Prob. (0..1)"): fig, ax = plt.subplots(figsize=(5,5)) cmap = plt.cm.get_cmap('Blues') im = ax.imshow(prob_map, vmin=0, vmax=1, origin='lower') ax.set_axis_off() ax.set_title(title) cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04) return fig
+@st.cache_data(ttl=30)
+def fetch_local_radar_frames_mock(lat, lon, frames=12, H=128, W=128):
+    """
+    Mocked radar frames: returns (frames, H, W) float32 array with values 0..1.
+    Replace with real local radar ingestion (FTP/HTTP or local disk).
+    """
+    rng = np.random.default_rng(seed=abs(int((lat+lon)*1e4)) % 2**31)
+    base = rng.random((frames, H, W)) * 0.15
+    # add a moving 'cell' to simulate precipitation
+    for t in range(frames):
+        cx = int(H*0.3 + t*0.6)
+        cy = int(W*0.4 + t*0.9)
+        rr = 10
+        Y, X = np.ogrid[:H, :W]
+        mask = ((X-cx)**2 + (Y-cy)**2) <= rr*rr
+        base[t][mask] += 0.7 * np.exp(-t/frames)
+    return np.clip(base, 0.0, 1.0).astype('float32')
 
------------------- Main UI ------------------
+def run_model_mock(frames_array, leads=12):
+    """
+    Simple advection + blur mock nowcast. Replace with real model inference.
+    Output: (leads, H, W) probabilistic maps (0..1)
+    """
+    frames, H, W = frames_array.shape
+    out = np.zeros((leads, H, W), dtype='float32')
+    last = frames_array[-1]
+    for i in range(leads):
+        shift = (i * 2) % W
+        advected = np.roll(last, shift=shift, axis=1)
+        out[i] = gaussian_blur(advected, sigma=1 + i*0.15)
+    return np.clip(out, 0.0, 1.0)
 
-col1, col2 = st.columns([1,1])
+# ONNX helpers (optional)
+def load_onnx_model(path):
+    if not ONNX_AVAILABLE:
+        raise RuntimeError("onnxruntime not installed. Install onnxruntime to use ONNX model.")
+    sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+    return sess
 
-with col1: st.subheader("Input (recent radar frames)") st.write(f"Location: {lat:.4f}, {lon:.4f} — grid {resolution_km} km — cadence {cadence_min} min — history {frames} frames") frames_arr = fetch_local_radar_frames_mock(lat, lon, frames=frames, H=128, W=128) # show last 3 frames last3 = frames_arr[-3:] fig, axs = plt.subplots(1,3, figsize=(12,4)) for i in range(3): axs[i].imshow(last3[i], origin='lower', vmin=0, vmax=1) axs[i].set_title(f"t-{3-i} frame") axs[i].axis('off') st.pyplot(fig)
+def run_onnx_inference(sess, frames_array):
+    """
+    Example wrapper: adapt input preprocessing / axis order to your ONNX model's expectations.
+    Assumes model expects shape (1, C, T, H, W) or similar; change accordingly.
+    """
+    inp = frames_array.astype('float32')[None, None, ...]  # (1,1,T,H,W)
+    out = sess.run(None, {sess.get_inputs()[0].name: inp})
+    # Expecting an output like (1, leads, H, W)
+    out_arr = np.array(out[0])
+    if out_arr.ndim == 4:
+        return out_arr[0]  # (leads, H, W)
+    # adapt as needed
+    return out_arr.squeeze()
 
-with col2: st.subheader("Nowcast output") model = load_mock_model() if run_button: t0 = time.time() leads = max(1, lead_minutes // cadence_min) prob_maps = run_model_mock(model, frames_arr, leads=leads) # pick center pixel as point forecast px, py = prob_maps.shape[1]//2, prob_maps.shape[2]//2 chance_next = float(prob_maps.mean()) st.metric(label="Chance of precipitation (avg next leads)", value=f"{chance_next*100:.1f}%") # show lead panels lead_idx = [0, max(0, leads//3), leads-1] tabs = st.tabs([f"t+{(i+1)*cadence_min}m" for i in lead_idx]) for tab, idx in zip(tabs, lead_idx): with tab: fig_map = plot_heatmap(prob_maps[idx], title=f"Prob t+{(idx+1)*cadence_min}m") st.pyplot(fig_map) st.write("\n") st.write({ "lat": lat, "lon": lon, "chance_next_avg": round(chance_next, 3), "lead_minutes": lead_minutes, "last_input": datetime.utcnow().isoformat() + "Z", "inference_time_s": round(time.time() - t0, 2) }) else: st.info("Adjust settings in the sidebar and click Run nowcast to generate a demo prediction.")
+# ----------------- Streamlit UI -----------------
+st.set_page_config(page_title="AI Agent for Agriculture + Local Nowcast", layout="wide")
+# Header
+st.markdown("""
+    <div style='display:flex;align-items:center;justify-content:space-between'>
+      <div>
+        <h1 style='margin:0'>🌾 AI Agent for Smart Agriculture + Local Nowcast</h1>
+        <p style='margin:0'>Get farming advice (AI + weather + soil) and quick local rain nowcasting.</p>
+      </div>
+    </div>
+    <hr/>
+""", unsafe_allow_html=True)
 
-st.markdown('---') st.caption('This demo uses mocked radar + model. Replace fetch_local_radar_frames_mock and run_model_mock with real code and load your trained model (preferably as ONNX or a small TF/Torch model for inference).')
+# Lottie animation
+if hello_animation:
+    st_lottie(hello_animation, height=180, key="ai-animation")
 
------------------- Footer / download demo artifacts ------------------
+# Layout: two main columns
+left_col, right_col = st.columns([2, 1])
 
-st.markdown("### Helpful files & deploy notes") st.markdown("- requirements.txt and a short README.md are provided in the repository. Push to GitHub and connect to Streamlit Community Cloud for automatic deploy.")
+with left_col:
+    st.subheader("1) Location & Weather")
+    location = st.text_input("📍 Enter your farm location (village / taluka / district):")
 
+    if location:
+        with st.spinner("📡 Fetching location & weather..."):
+            lat, lon = get_coordinates(location)
+            if not lat:
+                st.error("❌ Could not find coordinates. Try a more specific location.")
+            else:
+                st.success(f"✅ Coordinates: ({lat:.6f}, {lon:.6f})")
+
+                past = get_past_weather(lat, lon)
+                future = get_future_weather(lat, lon)
+                soil = get_soil_data(lat, lon)
+
+                # build DataFrames (guard against empty dicts)
+                df_past = pd.DataFrame(past) if past else pd.DataFrame()
+                df_future = pd.DataFrame(future) if future else pd.DataFrame()
+                if df_past.shape[0] > 0:
+                    df_past["date"] = pd.date_range(end=datetime.today() - timedelta(days=1), periods=len(df_past))
+                if df_future.shape[0] > 0:
+                    df_future["date"] = pd.date_range(start=datetime.today(), periods=len(df_future))
+
+                # Weather chart
+                st.markdown("### 📈 Weather Dashboard (Past & Forecast)")
+                fig = go.Figure()
+                if not df_past.empty:
+                    if "temperature_2m_max" in df_past:
+                        fig.add_trace(go.Scatter(x=df_past["date"], y=df_past["temperature_2m_max"],
+                                                 mode="lines+markers", name="Past Max Temp"))
+                    if "temperature_2m_min" in df_past:
+                        fig.add_trace(go.Scatter(x=df_past["date"], y=df_past["temperature_2m_min"],
+                                                 mode="lines+markers", name="Past Min Temp"))
+                    if "precipitation_sum" in df_past:
+                        fig.add_trace(go.Bar(x=df_past["date"], y=df_past["precipitation_sum"],
+                                             name="Past Rain", marker_color='rgba(0,100,255,0.4)'))
+
+                if not df_future.empty:
+                    if "temperature_2m_max" in df_future:
+                        fig.add_trace(go.Scatter(x=df_future["date"], y=df_future["temperature_2m_max"],
+                                                 mode="lines+markers", name="Forecast Max Temp", line=dict(dash='dash')))
+                    if "temperature_2m_min" in df_future:
+                        fig.add_trace(go.Scatter(x=df_future["date"], y=df_future["temperature_2m_min"],
+                                                 mode="lines+markers", name="Forecast Min Temp", line=dict(dash='dash')))
+                    if "precipitation_sum" in df_future:
+                        fig.add_trace(go.Bar(x=df_future["date"], y=df_future["precipitation_sum"],
+                                             name="Forecast Rain", marker_color='rgba(0,200,255,0.4)'))
+
+                fig.update_layout(title="🌦️ 10-Day Past & Future Weather Overview",
+                                  xaxis_title="Date",
+                                  yaxis_title="Temperature (°C) / Rainfall (mm)",
+                                  legend_title="Legend",
+                                  barmode='overlay',
+                                  template="plotly_white")
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Soil
+                st.markdown("### 🌱 Soil Summary")
+                st.write(f"- pH: **{soil['phh2o']}**")
+                st.write(f"- Organic Carbon: **{soil['ocd']}**")
+                st.write(f"- Sand/Silt/Clay: **{soil['sand']}% / {soil['silt']}% / {soil['clay']}%**")
+
+                # AI Advice
+                query = st.text_input("💬 Ask about crop, irrigation, pests, or fertilizer:")
+                language = st.radio("🌐 Select your language:", ["English", "Gujarati", "Hindi"], index=0, horizontal=True)
+
+                if query:
+                    with st.spinner("🤖 AI is thinking..."):
+                        advice = get_advice(location, past, future, soil, query, language)
+                        st.markdown("### 💡 AI Agent Suggestion:")
+                        st.success(advice)
+
+with right_col:
+    st.subheader("2) Local Nowcast (Real-time rain)")
+
+    # Nowcast settings
+    cadence_min = st.selectbox("Temporal cadence (min)", [1, 5, 10], index=1)
+    history_frames = st.slider("History frames (how many past frames to use)", min_value=6, max_value=24, value=12)
+    lead_minutes = st.slider("Forecast lead (minutes)", min_value=15, max_value=120, value=60, step=15)
+    use_onnx = False
+    if ONNX_AVAILABLE:
+        use_onnx = st.checkbox("Use ONNX model (onnxruntime available)", value=False)
+    st.markdown("**Model input / grid**: Demo uses a mocked 128×128 grid around the point. Replace with your local grid and real radar fetch code.")
+
+    # ONNX model loader UI
+    if use_onnx:
+        st.markdown("Upload ONNX model (optional):")
+        onnx_file = st.file_uploader("Choose ONNX file", type=["onnx"])
+        if onnx_file is not None:
+            # save to temp and load
+            tmp_path = "onnx_model.onnx"
+            with open(tmp_path, "wb") as f:
+                f.write(onnx_file.read())
+            try:
+                sess = load_onnx_model(tmp_path)
+                st.success("ONNX model loaded.")
+            except Exception as e:
+                st.error(f"Failed to load ONNX: {e}")
+                sess = None
+        else:
+            sess = None
+    else:
+        sess = None
+
+    # Nowcast run button
+    if st.button("Run Nowcast"):
+        if not location:
+            st.warning("Enter a location first in the left panel.")
+        else:
+            with st.spinner("Running nowcast..."):
+                # 1) fetch frames (mocked here)
+                frames_arr = fetch_local_radar_frames_mock(lat, lon, frames=history_frames, H=128, W=128)
+
+                # 2) run inference (ONNX if requested & available, else mock)
+                leads = max(1, lead_minutes // cadence_min)
+                if sess is not None:
+                    try:
+                        prob_maps = run_onnx_inference(sess, frames_arr)
+                        # ensure shape (leads, H, W)
+                        if prob_maps.ndim == 3:
+                            pass
+                        elif prob_maps.ndim == 4 and prob_maps.shape[0] == 1:
+                            prob_maps = prob_maps[0]
+                    except Exception as e:
+                        st.error(f"ONNX inference failed, falling back to mock: {e}")
+                        prob_maps = run_model_mock(frames_arr, leads=leads)
+                else:
+                    prob_maps = run_model_mock(frames_arr, leads=leads)
+
+                # 3) show last frames and nowcast results
+                st.markdown("**Recent radar frames (mock)**")
+                # show small image grid of last 3 frames
+                last3 = frames_arr[-3:]
+                cols = st.columns(3)
+                for i, c in enumerate(cols):
+                    with c:
+                        st.image((last3[i]*255).astype('uint8'), caption=f"t-{3-i} frame", clamp=True, use_column_width=True)
+
+                st.markdown("**Nowcast probability maps**")
+                # show 3 lead maps (early / mid / last)
+                idxs = [0, max(0, leads//2), leads-1]
+                for idx in idxs:
+                    st.markdown(f"t+{(idx+1)*cadence_min} minutes")
+                    # convert to image-like heatmap
+                    map_img = (prob_maps[idx] * 255).astype('uint8')
+                    st.image(map_img, clamp=True, use_column_width=True)
+
+                # Point forecast at center pixel
+                px, py = prob_maps.shape[1]//2, prob_maps.shape[2]//2
+                chance_next = float(prob_maps.mean())
+                st.metric(label="Chance of precipitation (avg next leads)", value=f"{chance_next*100:.1f}%")
+                # Also show per-lead probabilities for center pixel
+                lead_probs = {f"t+{(i+1)*cadence_min}m": float(prob_maps[i, px, py]) for i in range(prob_maps.shape[0])}
+                st.write("Center-point lead probabilities (sample):")
+                # show as small dataframe
+                df_leads = pd.DataFrame({
+                    "lead_min": [(i+1)*cadence_min for i in range(prob_maps.shape[0])],
+                    "prob": [round(float(prob_maps[i, px, py]), 3) for i in range(prob_maps.shape[0])]
+                })
+                st.dataframe(df_leads)
+
+                st.success("Nowcast complete")
+                st.write({
+                    "lat": lat, "lon": lon,
+                    "chance_next_avg": round(chance_next, 3),
+                    "lead_minutes": lead_minutes,
+                    "last_input": datetime.utcnow().isoformat() + "Z",
+                    "inference_time_s": round(time.time() - time.time(), 2)  # placeholder
+                })
+
+# Footer
+st.markdown("---")
+st.caption("This app demo combines AI advice and a local nowcast demo. Replace mocked radar and mock model with your real radar ingestion and trained model (ONNX/Torch/TF).")
+
+# ----------------- End of file -----------------
