@@ -17,7 +17,7 @@ except Exception as e:
     _folium_import_error = e
 
 # App header
-st.title("☔ Rain Forecast Pro – Weather, Alerts & Flood Risk")
+st.title("☔ RainBot")
 st.markdown("An AI-powered rain monitoring dashboard 🌧️ for local users (India Edition 🇮🇳)")
 
 # ----------------- User Inputs -----------------
