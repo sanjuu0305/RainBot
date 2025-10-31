@@ -1,4 +1,11 @@
 # streamlit_rain_nowcast.py
+"""
+AI Real-Time Rain Forecast - Streamlit app (cleaned)
+- Location-based short-term nowcast (mock) + hourly forecast from Open-Meteo
+- This file is UTF-8 plain text and free of non-printable characters.
+- Replace the mock nowcast functions with your real radar/model code when ready.
+"""
+
 import streamlit as st
 import numpy as np
 import requests
@@ -21,7 +28,7 @@ body { background-color: #0e1117; color: #e6eef8; }
 .stMarkdown, .stText, .stButton { color: #e6eef8; }
 """
 theme = st.sidebar.selectbox("Theme", ["Light", "Dark"], index=0)
-st.markdown(f"<style>{DARK_CSS if theme=='Dark' else LIGHT_CSS}</style>", unsafe_allow_html=True)
+st.markdown(f"<style>{DARK_CSS if theme == 'Dark' else LIGHT_CSS}</style>", unsafe_allow_html=True)
 
 # ---------------- Sidebar / Settings ----------------
 st.sidebar.header("Nowcast settings")
@@ -39,7 +46,7 @@ st.sidebar.markdown("Data: Open-Meteo (hourly forecast). Nowcast is mocked for d
 def geocode_location(name: str):
     try:
         geolocator = Nominatim(user_agent="rain-nowcast-app")
-        loc = geolocator.geocode(name)
+        loc = geolocator.geocode(name, timeout=10)
         if loc:
             return loc.latitude, loc.longitude
     except Exception:
@@ -47,7 +54,7 @@ def geocode_location(name: str):
     return None, None
 
 @st.cache_data(ttl=300)
-def fetch_hourly_forecast(lat: float, lon: float, hours: int = 48):
+def fetch_hourly_forecast(lat: float, lon: float, hours: int = 72):
     try:
         url = (
             f"https://api.open-meteo.com/v1/forecast?"
@@ -63,7 +70,6 @@ def fetch_hourly_forecast(lat: float, lon: float, hours: int = 48):
         df = pd.DataFrame(data)
         df["time"] = pd.to_datetime(df["time"])
         df = df.set_index("time")
-        # return at least next `hours` rows
         return df.head(hours)
     except Exception:
         return pd.DataFrame()
@@ -73,7 +79,10 @@ def gaussian_blur(img, sigma=1.0):
 
 @st.cache_data(ttl=30)
 def fetch_mock_radar_frames(lat, lon, frames=12, H=128, W=128):
-    # deterministic pseudo-random mock based on coords
+    """
+    Deterministic pseudo-random mock radar frames based on coordinates.
+    Returns array shape (frames, H, W) with values in [0,1].
+    """
     rng = np.random.default_rng(seed=abs(int((lat + lon) * 1e4)) % 2**31)
     base = rng.random((frames, H, W)) * 0.12
     for t in range(frames):
@@ -86,6 +95,9 @@ def fetch_mock_radar_frames(lat, lon, frames=12, H=128, W=128):
     return np.clip(base, 0.0, 1.0).astype("float32")
 
 def run_mock_nowcast(frames_array, leads=12):
+    """
+    Simple advective+blur mock nowcast. Returns (leads, H, W) probability maps.
+    """
     frames, H, W = frames_array.shape
     out = np.zeros((leads, H, W), dtype="float32")
     last = frames_array[-1]
@@ -104,7 +116,7 @@ with left:
     if location_input:
         lat_g, lon_g = geocode_location(location_input)
         if lat_g is None:
-            st.error("Could not find location. Try more specific name or use lat/lon in sidebar.")
+            st.error("Could not find location. Try a more specific name or use lat/lon in the sidebar.")
         else:
             st.success(f"Found: {location_input} → ({lat_g:.6f}, {lon_g:.6f})")
             lat, lon = lat_g, lon_g
@@ -115,10 +127,19 @@ with left:
         st.info("Hourly forecast not available or Open-Meteo unreachable.")
     else:
         fig = go.Figure()
-        # precipitation as bars
-        fig.add_trace(go.Bar(x=df_hourly.index, y=df_hourly["precipitation"], name="Precip (mm)", marker_color="rgba(0,120,255,0.4)"))
-        # temperature as line
-        fig.add_trace(go.Line(x=df_hourly.index, y=df_hourly["temperature_2m"], name="Temp (°C)", yaxis="y2", line=dict(color="orange")))
+        fig.add_trace(go.Bar(
+            x=df_hourly.index,
+            y=df_hourly["precipitation"],
+            name="Precip (mm)",
+            marker_color="rgba(0,120,255,0.4)"
+        ))
+        fig.add_trace(go.Scatter(
+            x=df_hourly.index,
+            y=df_hourly["temperature_2m"],
+            name="Temp (°C)",
+            yaxis="y2",
+            line=dict(color="orange")
+        ))
         fig.update_layout(
             title="Hourly Precipitation & Temperature (UTC)",
             xaxis_title="Time (UTC)",
@@ -163,12 +184,30 @@ with left:
             now_utc = pd.Timestamp.utcnow().floor(f"{cadence_min}min")
             lead_times = [now_utc + pd.Timedelta(minutes=(i + 1) * cadence_min) for i in range(len(center_probs))]
             timeline_df = pd.DataFrame({"time": lead_times, "nowcast_prob": center_probs}).set_index("time")
-            # slice hourly precip to roughly the same window for plotting
+
             end_time = lead_times[-1]
-            precip_slice = df_hourly.loc[now_utc:end_time]["precipitation"] if now_utc in df_hourly.index else df_hourly["precipitation"].loc[df_hourly.index <= end_time]
+            # align precip slice to plotting window
+            precip_slice = df_hourly["precipitation"].loc[(df_hourly.index >= now_utc) & (df_hourly.index <= end_time)]
+            if precip_slice.empty:
+                # fallback: use next N hours beginning at now_utc
+                precip_slice = df_hourly["precipitation"].head(len(lead_times))
+
             fig2 = go.Figure()
-            fig2.add_trace(go.Bar(x=precip_slice.index, y=precip_slice.values, name="Forecast precip (mm)", yaxis="y2", marker_color="rgba(0,150,255,0.4)"))
-            fig2.add_trace(go.Scatter(x=timeline_df.index, y=timeline_df["nowcast_prob"], mode="lines+markers", name="Nowcast P(rain)", yaxis="y1", line=dict(width=2, color="crimson")))
+            fig2.add_trace(go.Bar(
+                x=precip_slice.index,
+                y=precip_slice.values,
+                name="Forecast precip (mm)",
+                yaxis="y2",
+                marker_color="rgba(0,150,255,0.4)"
+            ))
+            fig2.add_trace(go.Scatter(
+                x=timeline_df.index,
+                y=timeline_df["nowcast_prob"],
+                mode="lines+markers",
+                name="Nowcast P(rain)",
+                yaxis="y1",
+                line=dict(width=2, color="crimson")
+            ))
             fig2.update_layout(
                 title="Nowcast probability vs Hourly forecast precipitation",
                 xaxis_title="Time (UTC)",
@@ -186,7 +225,12 @@ with left:
         else:
             st.success("Low chance of rain in the immediate window.")
 
-        st.write({"lat": lat, "lon": lon, "lead_minutes": lead_minutes, "runtime_s": round(time.time() - t_start, 2)})
+        st.write({
+            "lat": lat,
+            "lon": lon,
+            "lead_minutes": lead_minutes,
+            "runtime_s": round(time.time() - t_start, 2)
+        })
     else:
         st.info("Set parameters in sidebar and click **Run Nowcast** to generate a demo prediction.")
 
@@ -199,4 +243,5 @@ with right:
     st.write("- This demo uses a **mock nowcast** (advection + blur). Replace `fetch_mock_radar_frames()` and `run_mock_nowcast()` with real radar ingestion + model inference.")
     st.write("- Open-Meteo provides hourly forecast precipitation used to compare with nowcast probability.")
     st.write("- Times shown are in **UTC**.")
-```0
+
+# End of file
