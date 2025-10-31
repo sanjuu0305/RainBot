@@ -8,4 +8,4 @@ streamlit-lottie
 folium
 streamlit-folium
 google-generativeai
-googletrans==4.0.0-rc1
+deep-translator
