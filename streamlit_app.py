@@ -10,7 +10,7 @@ st.set_page_config(page_title="Rain Forecast", layout="centered", page_icon="�
 st.title("🌧️ Rain Forecast Prediction App")
 st.markdown("Enter your city name to get 5-day rain and weather forecast.")
 
-# ----------------- User Input -----------------
+
 city = st.text_input("Enter City Name:", "Ahmedabad")
 
 # Get API key from Streamlit secrets (use .get to avoid KeyError)
