@@ -1,7 +1,6 @@
 streamlit==1.22.0
-pandas
 requests
+pandas
 plotly
 folium
 streamlit-folium
-streamlit-lottie
