@@ -1,162 +1,121 @@
 import streamlit as st
-st.set_page_config(page_title="🌦️ Rain Forecast Pro", layout="wide", page_icon="☔")
-
 import requests
 import pandas as pd
 import plotly.graph_objects as go
+from geopy.geocoders import Nominatim
 from datetime import datetime
-from googletrans import Translator  # for translation
+from deep_translator import GoogleTranslator
+import json
 
-# ----------------- Optional Folium Import -----------------
-_have_folium = False
-try:
-    import folium
-    from streamlit_folium import st_folium
-    _have_folium = True
-except ImportError:
-    pass
+# ----------------- Streamlit Setup -----------------
+st.set_page_config(page_title="🌦️ Rain Forecast", layout="wide", initial_sidebar_state="expanded")
 
-# ----------------- Translator Setup -----------------
-translator = Translator()
+# ----------------- Sidebar: Language Selector -----------------
+language = st.sidebar.selectbox("🌐 Choose Language", ["English", "Hindi", "Gujarati"])
 
-# ----------------- Sidebar: Language Selection -----------------
-st.sidebar.header("🌐 Language Settings")
-lang = st.sidebar.selectbox("Choose Language", ["English", "Hindi", "Gujarati"])
-
-def t(text):
-    if lang == "English":
+def translate_text(text, target_lang):
+    if target_lang == "English":
         return text
-    target = "hi" if lang == "Hindi" else "gu"
-    try:
-        return GoogleTranslator(source="auto", target=target).translate(text)
-    except:
-        return text  # fallback if translation fails
+    elif target_lang == "Hindi":
+        return GoogleTranslator(source='auto', target='hi').translate(text)
+    elif target_lang == "Gujarati":
+        return GoogleTranslator(source='auto', target='gu').translate(text)
 
-# ----------------- App Header -----------------
-st.title(t("☔ RainBot"))
-st.markdown(t("An AI-powered rain monitoring dashboard for local users (India Edition 🇮🇳)"))
+# ----------------- API Config -----------------
+api_key = st.secrets.get("openweather_api_key", "YOUR_OPENWEATHERMAP_API_KEY")
 
-# ----------------- User Input -----------------
-city = st.text_input(t("🏙️ Enter City Name:"), "Ahmedabad")
-api_key = st.secrets.get("api_key", "")
+# ----------------- Input: Location -----------------
+st.title(translate_text("🌦️ Rain Forecast Dashboard", language))
+city = st.text_input(translate_text("Enter your city name:", language), "Ahmedabad")
 
-if not api_key:
-    st.error(t("⚠️ API key missing! Please add your OpenWeatherMap API key in Streamlit → Settings → Secrets."))
-    st.info(t('Example secrets.toml entry:\n\napi_key = "your_real_openweathermap_api_key"'))
-    st.stop()
+# ----------------- Geolocation -----------------
+if city:
+    geolocator = Nominatim(user_agent="geoapiExercises")
+    location = geolocator.geocode(city)
+    if location:
+        lat, lon = location.latitude, location.longitude
 
-# ----------------- Fetch Weather Data -----------------
-def get_weather_data(city_name):
-    """Fetch 5-day/3-hour forecast data from OpenWeatherMap."""
-    try:
-        url_forecast = "https://api.openweathermap.org/data/2.5/forecast"
-        params = {"q": city_name, "appid": api_key, "units": "metric"}
-        res = requests.get(url_forecast, params=params, timeout=10)
+        # ----------------- Fetch Weather Data -----------------
+        url = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={api_key}&units=metric"
+        response = requests.get(url)
+        data = response.json()
 
-        if res.status_code != 200:
-            msg = res.json().get("message", res.text)
-            return None, None, None, f"API error {res.status_code}: {msg}"
+        if response.status_code == 200:
+            forecast_list = data['list']
 
-        data = res.json()
-        lat = data["city"]["coord"]["lat"]
-        lon = data["city"]["coord"]["lon"]
+            # Extract Rain Data
+            times, rain_amounts, humidity = [], [], []
+            for item in forecast_list:
+                times.append(datetime.fromtimestamp(item['dt']))
+                rain = item.get('rain', {}).get('3h', 0)
+                rain_amounts.append(rain)
+                humidity.append(item['main']['humidity'])
 
-        df = pd.DataFrame([{
-            "Datetime": datetime.fromtimestamp(item["dt"]),
-            "Temperature (°C)": item["main"]["temp"],
-            "Humidity (%)": item["main"]["humidity"],
-            "Rain (mm)": item.get("rain", {}).get("3h", 0.0),
-            "Weather": item["weather"][0]["description"].capitalize(),
-            "Wind (km/h)": round(item["wind"]["speed"] * 3.6, 1)
-        } for item in data["list"]])
+            df = pd.DataFrame({
+                'Time': times,
+                'Rainfall (mm)': rain_amounts,
+                'Humidity (%)': humidity
+            })
 
-        df["Date"] = df["Datetime"].dt.date
-        return df, lat, lon, None
-    except Exception as e:
-        return None, None, None, str(e)
+            # ----------------- Hourly Rainfall Chart -----------------
+            st.subheader(translate_text("🕒 Hourly Rainfall Forecast", language))
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=df['Time'], y=df['Rainfall (mm)'], name='Rainfall (mm)'))
+            fig.add_trace(go.Scatter(x=df['Time'], y=df['Humidity (%)'], name='Humidity (%)', yaxis='y2'))
 
-data, lat, lon, err = get_weather_data(city)
-if err:
-    st.error(f"❌ {t(err)}")
-    st.stop()
+            fig.update_layout(
+                xaxis_title="Time",
+                yaxis_title="Rainfall (mm)",
+                yaxis2=dict(title="Humidity (%)", overlaying="y", side="right"),
+                template="plotly_dark",
+                showlegend=True
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-# ----------------- 📍 Rain Intensity Map -----------------
-st.subheader(t("📍 Rain Intensity Map"))
-if _have_folium:
-    m = folium.Map(location=[lat, lon], zoom_start=7)
-    folium.TileLayer("cartodbpositron").add_to(m)
-    folium.Marker([lat, lon], popup=city, tooltip=city).add_to(m)
-    folium.raster_layers.TileLayer(
-        tiles=f"https://tile.openweathermap.org/map/precipitation_new/{{z}}/{{x}}/{{y}}.png?appid={api_key}",
-        attr="Rain Data © OpenWeatherMap", name="Rainfall", opacity=0.5
-    ).add_to(m)
-    folium.LayerControl().add_to(m)
-    st_folium(m, width=700, height=500)
-else:
-    st.info(t("Map feature disabled. Please install 'folium' and 'streamlit-folium'."))
+            # ----------------- 7-Day Average Summary -----------------
+            st.subheader(translate_text("📊 7-Day Average Rainfall Summary", language))
+            daily_avg = df.groupby(df['Time'].dt.date).mean(numeric_only=True)
+            st.dataframe(daily_avg)
 
-# ----------------- 🕒 Hourly Forecast -----------------
-st.subheader(t("🕒 Hourly Forecast (Next 48 Hours)"))
-fig_hourly = go.Figure()
-fig_hourly.add_trace(go.Bar(x=data["Datetime"], y=data["Rain (mm)"], name="Rain (mm)", marker_color='skyblue'))
-fig_hourly.add_trace(go.Scatter(x=data["Datetime"], y=data["Temperature (°C)"],
-                                name="Temperature (°C)", mode="lines+markers", yaxis="y2"))
-fig_hourly.update_layout(
-    title=t("Hourly Rain & Temperature (3-hour step)"),
-    xaxis_title=t("Time"),
-    yaxis=dict(title=t("Rain (mm)")),
-    yaxis2=dict(title=t("Temperature (°C)"), overlaying="y", side="right"),
-    legend=dict(x=0, y=1.1, orientation="h")
-)
-st.plotly_chart(fig_hourly, use_container_width=True)
+            # ----------------- Flood Risk Index -----------------
+            avg_rain = df['Rainfall (mm)'].mean()
+            avg_humidity = df['Humidity (%)'].mean()
+            risk_score = (avg_rain * 0.7) + (avg_humidity * 0.3)
+            if risk_score < 20:
+                risk_level = translate_text("Low", language)
+                color = "green"
+            elif risk_score < 50:
+                risk_level = translate_text("Moderate", language)
+                color = "orange"
+            else:
+                risk_level = translate_text("High", language)
+                color = "red"
 
-# ----------------- 📊 7-Day Average Rainfall Summary -----------------
-st.subheader(t("📊 7-Day Average Rainfall Summary"))
-df_daily = data.groupby("Date").agg({
-    "Rain (mm)": "sum",
-    "Temperature (°C)": "mean",
-    "Humidity (%)": "mean"
-}).reset_index()
+            st.subheader(translate_text("💧 Real-Time Flood Risk Index", language))
+            st.markdown(f"<h3 style='color:{color}'>{translate_text('Flood Risk Level:', language)} {risk_level}</h3>", unsafe_allow_html=True)
 
-fig_summary = go.Figure()
-fig_summary.add_trace(go.Bar(x=df_daily["Date"], y=df_daily["Rain (mm)"], name="Rain (mm)", marker_color='deepskyblue'))
-fig_summary.update_layout(title=t("Daily Rainfall Trend"), xaxis_title=t("Date"), yaxis_title=t("Rain (mm)"))
-st.plotly_chart(fig_summary, use_container_width=True)
-st.dataframe(df_daily, use_container_width=True)
+            # ----------------- Map View -----------------
+            st.subheader(translate_text("📍 Map View - Rainfall Area", language))
+            st.map(pd.DataFrame([[lat, lon]], columns=['lat', 'lon']))
 
-# ----------------- 💧 Flood Risk Index -----------------
-st.subheader(t("💧 Real-Time Flood Risk Index"))
-avg_rain = df_daily["Rain (mm)"].mean()
-avg_humidity = df_daily["Humidity (%)"].mean()
+            # ----------------- Rain Alerts (Optional) -----------------
+            st.subheader(translate_text("📲 Rain Alert (Optional)", language))
+            st.info(translate_text("You can connect your Telegram bot or email to get alerts.", language))
+            st.write(translate_text("Configure via st.secrets or UI fields below.", language))
 
-if avg_rain > 20 and avg_humidity > 80:
-    flood_risk = t("🚨 HIGH – Flood risk possible!")
-elif avg_rain > 10 and avg_humidity > 70:
-    flood_risk = t("⚠️ MEDIUM – Watch weather updates.")
-else:
-    flood_risk = t("✅ LOW – No flood risk.")
-st.info(flood_risk)
+            telegram_token = st.text_input("🔑 Telegram Token (Optional)", type="password")
+            telegram_chat_id = st.text_input("💬 Chat ID (Optional)")
 
-# ----------------- 📲 Telegram Rain Alert -----------------
-st.subheader(t("📲 Rain Alert Notification"))
-telegram_token = st.text_input(t("Enter Telegram Bot Token (optional):"), type="password")
-chat_id = st.text_input(t("Enter Your Telegram Chat ID (optional):"))
+            if st.button(translate_text("Send Test Alert", language)):
+                if telegram_token and telegram_chat_id:
+                    message = f"🌧️ Rain Alert for {city}! Flood Risk: {risk_level}"
+                    send_url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+                    requests.post(send_url, data={"chat_id": telegram_chat_id, "text": message})
+                    st.success(translate_text("Alert sent successfully!", language))
+                else:
+                    st.warning(translate_text("Please enter both Telegram token and chat ID.", language))
 
-def get_today_rain(df):
-    today = datetime.utcnow().date()
-    if today in df["Date"].values:
-        return df[df["Date"] == today]["Rain (mm)"].sum()
-    return 0.0
-
-if st.button(t("Send Rain Alert")):
-    if not telegram_token or not chat_id:
-        st.warning(t("Please enter both Telegram Bot Token and Chat ID to send alerts."))
-    else:
-        rain_today = get_today_rain(df_daily)
-        msg = f"🌧️ {t('Rain Alert for')} {city}!\n{t('Today’s Rain')}: {rain_today:.2f} mm\n{t('Flood Risk')}: {flood_risk}"
-        telegram_url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-        resp = requests.post(telegram_url, data={"chat_id": chat_id, "text": msg})
-        if resp.status_code == 200:
-            st.success(t("✅ Alert sent successfully to your Telegram!"))
         else:
-            st.error(f"Telegram API error {resp.status_code}: {resp.text}")
+            st.error(translate_text("Failed to fetch weather data. Please check your API key.", language))
+    else:
+        st.error(translate_text("City not found. Please enter a valid location.", language))
