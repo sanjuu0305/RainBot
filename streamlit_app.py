@@ -4,55 +4,56 @@ st.set_page_config(page_title="🌦️ Rain Forecast Pro", layout="wide", page_i
 import requests
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime
 from googletrans import Translator  # for translation
 
-# ----------------- Folium Safe Import -----------------
+# ----------------- Optional Folium Import -----------------
 _have_folium = False
 try:
     import folium
     from streamlit_folium import st_folium
     _have_folium = True
-except:
+except ImportError:
     pass
 
 # ----------------- Translator Setup -----------------
 translator = Translator()
 
-# ----------------- Language Selection -----------------
+# ----------------- Sidebar: Language Selection -----------------
 st.sidebar.header("🌐 Language Settings")
 lang = st.sidebar.selectbox("Choose Language", ["English", "Hindi", "Gujarati"])
 
 def t(text):
-    """Translate text dynamically based on user language."""
+    """Translate text dynamically based on chosen language."""
     if lang == "English":
         return text
     dest = "hi" if lang == "Hindi" else "gu"
     try:
         return translator.translate(text, dest=dest).text
     except:
-        return text  # fallback
+        return text  # fallback if translation fails
 
 # ----------------- App Header -----------------
 st.title(t("☔ RainBot"))
 st.markdown(t("An AI-powered rain monitoring dashboard for local users (India Edition 🇮🇳)"))
 
-# ----------------- User Inputs -----------------
+# ----------------- User Input -----------------
 city = st.text_input(t("🏙️ Enter City Name:"), "Ahmedabad")
 api_key = st.secrets.get("api_key", "")
 
 if not api_key:
-    st.error(t("⚠️ API key missing! Add your OpenWeatherMap API key in Streamlit → Settings → Secrets."))
+    st.error(t("⚠️ API key missing! Please add your OpenWeatherMap API key in Streamlit → Settings → Secrets."))
     st.info(t('Example secrets.toml entry:\n\napi_key = "your_real_openweathermap_api_key"'))
     st.stop()
 
-# ----------------- Fetch Data -----------------
+# ----------------- Fetch Weather Data -----------------
 def get_weather_data(city_name):
-    """Return (df, lat, lon, error_message) - df is hourly forecast dataframe"""
+    """Fetch 5-day/3-hour forecast data from OpenWeatherMap."""
     try:
         url_forecast = "https://api.openweathermap.org/data/2.5/forecast"
         params = {"q": city_name, "appid": api_key, "units": "metric"}
         res = requests.get(url_forecast, params=params, timeout=10)
+
         if res.status_code != 200:
             msg = res.json().get("message", res.text)
             return None, None, None, f"API error {res.status_code}: {msg}"
@@ -72,7 +73,6 @@ def get_weather_data(city_name):
 
         df["Date"] = df["Datetime"].dt.date
         return df, lat, lon, None
-
     except Exception as e:
         return None, None, None, str(e)
 
@@ -81,12 +81,12 @@ if err:
     st.error(f"❌ {t(err)}")
     st.stop()
 
-# ----------------- Map View -----------------
+# ----------------- 📍 Rain Intensity Map -----------------
 st.subheader(t("📍 Rain Intensity Map"))
 if _have_folium:
     m = folium.Map(location=[lat, lon], zoom_start=7)
     folium.TileLayer("cartodbpositron").add_to(m)
-    folium.Marker([lat, lon], popup=f"{city}", tooltip=f"{city}").add_to(m)
+    folium.Marker([lat, lon], popup=city, tooltip=city).add_to(m)
     folium.raster_layers.TileLayer(
         tiles=f"https://tile.openweathermap.org/map/precipitation_new/{{z}}/{{x}}/{{y}}.png?appid={api_key}",
         attr="Rain Data © OpenWeatherMap", name="Rainfall", opacity=0.5
@@ -96,21 +96,22 @@ if _have_folium:
 else:
     st.info(t("Map feature disabled. Please install 'folium' and 'streamlit-folium'."))
 
-# ----------------- Hourly Forecast -----------------
+# ----------------- 🕒 Hourly Forecast -----------------
 st.subheader(t("🕒 Hourly Forecast (Next 48 Hours)"))
 fig_hourly = go.Figure()
-fig_hourly.add_trace(go.Bar(x=data["Datetime"], y=data["Rain (mm)"], name="Rain (mm)"))
+fig_hourly.add_trace(go.Bar(x=data["Datetime"], y=data["Rain (mm)"], name="Rain (mm)", marker_color='skyblue'))
 fig_hourly.add_trace(go.Scatter(x=data["Datetime"], y=data["Temperature (°C)"],
                                 name="Temperature (°C)", mode="lines+markers", yaxis="y2"))
 fig_hourly.update_layout(
-    title=t("Hourly (3-hour step) Rain & Temperature"),
+    title=t("Hourly Rain & Temperature (3-hour step)"),
     xaxis_title=t("Time"),
     yaxis=dict(title=t("Rain (mm)")),
-    yaxis2=dict(title=t("Temperature (°C)"), overlaying="y", side="right")
+    yaxis2=dict(title=t("Temperature (°C)"), overlaying="y", side="right"),
+    legend=dict(x=0, y=1.1, orientation="h")
 )
 st.plotly_chart(fig_hourly, use_container_width=True)
 
-# ----------------- 7-Day Summary -----------------
+# ----------------- 📊 7-Day Average Rainfall Summary -----------------
 st.subheader(t("📊 7-Day Average Rainfall Summary"))
 df_daily = data.groupby("Date").agg({
     "Rain (mm)": "sum",
@@ -119,12 +120,12 @@ df_daily = data.groupby("Date").agg({
 }).reset_index()
 
 fig_summary = go.Figure()
-fig_summary.add_trace(go.Bar(x=df_daily["Date"], y=df_daily["Rain (mm)"], name="Rain (mm)"))
+fig_summary.add_trace(go.Bar(x=df_daily["Date"], y=df_daily["Rain (mm)"], name="Rain (mm)", marker_color='deepskyblue'))
 fig_summary.update_layout(title=t("Daily Rainfall Trend"), xaxis_title=t("Date"), yaxis_title=t("Rain (mm)"))
 st.plotly_chart(fig_summary, use_container_width=True)
 st.dataframe(df_daily, use_container_width=True)
 
-# ----------------- Flood Risk Index -----------------
+# ----------------- 💧 Flood Risk Index -----------------
 st.subheader(t("💧 Real-Time Flood Risk Index"))
 avg_rain = df_daily["Rain (mm)"].mean()
 avg_humidity = df_daily["Humidity (%)"].mean()
@@ -137,7 +138,7 @@ else:
     flood_risk = t("✅ LOW – No flood risk.")
 st.info(flood_risk)
 
-# ----------------- Telegram Alerts -----------------
+# ----------------- 📲 Telegram Rain Alert -----------------
 st.subheader(t("📲 Rain Alert Notification"))
 telegram_token = st.text_input(t("Enter Telegram Bot Token (optional):"), type="password")
 chat_id = st.text_input(t("Enter Your Telegram Chat ID (optional):"))
