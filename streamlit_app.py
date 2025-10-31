@@ -1,7 +1,6 @@
 import streamlit as st
 st.set_page_config(page_title="🌦️ Rain Forecast Pro", layout="wide", page_icon="☔")
 
-# Other imports
 import requests
 import pandas as pd
 import plotly.graph_objects as go
