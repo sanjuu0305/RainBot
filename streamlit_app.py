@@ -14,7 +14,7 @@ st.markdown("Enter your city name to get 5-day rain and weather forecast.")
 city = st.text_input("Enter City Name:", "Ahmedabad")
 
 # Your OpenWeatherMap API key (get from https://openweathermap.org/api)
-api_key = "YOUR_API_KEY"
+api_key = "245b3686bfd9ad40841d5a99c91d11db"
 
 # ----------------- Fetch Data -----------------
 if st.button("Get Rain Forecast"):
