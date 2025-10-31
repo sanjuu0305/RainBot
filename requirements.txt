@@ -1,9 +1,10 @@
 streamlit
 requests
-geopy
 pandas
 plotly
-google-generativeai
 matplotlib
 streamlit-lottie
+folium
+streamlit-folium
 deep-translator
+google-generativeai
