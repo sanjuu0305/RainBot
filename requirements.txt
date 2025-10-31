@@ -3,9 +3,9 @@ requests
 geopy
 pandas
 plotly
-google-generativeai
 matplotlib
 streamlit-lottie
 folium
 streamlit-folium
-googletrans==4.0.0-rc1
+google-generativeai
+deep-translator
