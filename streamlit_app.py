@@ -18,7 +18,7 @@ api_key = "YOUR_API_KEY"
 
 # ----------------- Fetch Data -----------------
 if st.button("Get Rain Forecast"):
-    if api_key == "YOUR_API_KEY":
+    if api_key == "245b3686bfd9ad40841d5a99c91d11db":
         st.error("Please replace 'YOUR_API_KEY' with your OpenWeatherMap API key.")
     else:
         url = f"https://api.openweathermap.org/data/2.5/forecast?q={city}&appid={api_key}&units=metric"
