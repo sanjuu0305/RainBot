@@ -1,9 +1,8 @@
 # streamlit_rain_nowcast.py
 """
-AI Real-Time Rain Forecast - Streamlit app (cleaned)
-- Location-based short-term nowcast (mock) + hourly forecast from Open-Meteo
-- This file is UTF-8 plain text and free of non-printable characters.
-- Replace the mock nowcast functions with your real radar/model code when ready.
+AI Real-Time Rain Forecast - Streamlit app (scipy-free)
+- Uses a pure-NumPy separable Gaussian blur to avoid scipy dependency.
+- Mock nowcast + Open-Meteo hourly forecast.
 """
 
 import streamlit as st
@@ -11,7 +10,6 @@ import numpy as np
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from scipy.ndimage import gaussian_filter
 import plotly.graph_objects as go
 from geopy.geocoders import Nominatim
 import time
@@ -74,15 +72,40 @@ def fetch_hourly_forecast(lat: float, lon: float, hours: int = 72):
     except Exception:
         return pd.DataFrame()
 
-def gaussian_blur(img, sigma=1.0):
-    return gaussian_filter(img, sigma=sigma)
+# ---------------- NumPy separable Gaussian blur (no scipy) ----------------
+def gaussian_kernel1d(sigma, radius=None):
+    if sigma <= 0:
+        return np.array([1.0], dtype=np.float32)
+    if radius is None:
+        radius = int(3.0 * sigma)
+    x = np.arange(-radius, radius + 1)
+    k = np.exp(-(x ** 2) / (2 * sigma * sigma))
+    k = k / k.sum()
+    return k.astype(np.float32)
 
+def convolve_1d_along_axis(arr, kernel, axis):
+    """Convolve 1D kernel along given axis using np.apply_along_axis + np.convolve(mode='same')."""
+    def conv1d(v):
+        return np.convolve(v, kernel, mode="same")
+    return np.apply_along_axis(conv1d, axis, arr)
+
+def gaussian_blur_numpy(img, sigma=1.0):
+    """
+    Separable Gaussian blur implemented with NumPy.
+    img: 2D array
+    sigma: standard deviation
+    """
+    if sigma <= 0:
+        return img
+    kernel = gaussian_kernel1d(sigma)
+    # convolve rows then cols (separable)
+    tmp = convolve_1d_along_axis(img, kernel, axis=1)
+    out = convolve_1d_along_axis(tmp, kernel, axis=0)
+    return out
+
+# ---------------- Mock radar/model functions ----------------
 @st.cache_data(ttl=30)
 def fetch_mock_radar_frames(lat, lon, frames=12, H=128, W=128):
-    """
-    Deterministic pseudo-random mock radar frames based on coordinates.
-    Returns array shape (frames, H, W) with values in [0,1].
-    """
     rng = np.random.default_rng(seed=abs(int((lat + lon) * 1e4)) % 2**31)
     base = rng.random((frames, H, W)) * 0.12
     for t in range(frames):
@@ -95,16 +118,13 @@ def fetch_mock_radar_frames(lat, lon, frames=12, H=128, W=128):
     return np.clip(base, 0.0, 1.0).astype("float32")
 
 def run_mock_nowcast(frames_array, leads=12):
-    """
-    Simple advective+blur mock nowcast. Returns (leads, H, W) probability maps.
-    """
     frames, H, W = frames_array.shape
     out = np.zeros((leads, H, W), dtype="float32")
     last = frames_array[-1]
     for i in range(leads):
         shift = (i * 2) % W
         advected = np.roll(last, shift=shift, axis=1)
-        out[i] = gaussian_blur(advected, sigma=1 + i * 0.15)
+        out[i] = gaussian_blur_numpy(advected, sigma=1 + i * 0.15)
     return np.clip(out, 0.0, 1.0)
 
 # ---------------- Layout ----------------
@@ -186,10 +206,8 @@ with left:
             timeline_df = pd.DataFrame({"time": lead_times, "nowcast_prob": center_probs}).set_index("time")
 
             end_time = lead_times[-1]
-            # align precip slice to plotting window
             precip_slice = df_hourly["precipitation"].loc[(df_hourly.index >= now_utc) & (df_hourly.index <= end_time)]
             if precip_slice.empty:
-                # fallback: use next N hours beginning at now_utc
                 precip_slice = df_hourly["precipitation"].head(len(lead_times))
 
             fig2 = go.Figure()
@@ -240,7 +258,7 @@ with right:
     st.write("• Use the numeric lat/lon in the sidebar for precise coords.")
     st.markdown("---")
     st.subheader("Notes")
-    st.write("- This demo uses a **mock nowcast** (advection + blur). Replace `fetch_mock_radar_frames()` and `run_mock_nowcast()` with real radar ingestion + model inference.")
+    st.write("- This demo uses a **mock nowcast** (advection + separable NumPy Gaussian blur). Replace `fetch_mock_radar_frames()` and `run_mock_nowcast()` with real radar ingestion + model inference.")
     st.write("- Open-Meteo provides hourly forecast precipitation used to compare with nowcast probability.")
     st.write("- Times shown are in **UTC**.")
 
