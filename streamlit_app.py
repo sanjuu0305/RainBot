@@ -24,12 +24,11 @@ st.sidebar.header("🌐 Language Settings")
 lang = st.sidebar.selectbox("Choose Language", ["English", "Hindi", "Gujarati"])
 
 def t(text):
-    """Translate text dynamically based on chosen language."""
     if lang == "English":
         return text
-    dest = "hi" if lang == "Hindi" else "gu"
+    target = "hi" if lang == "Hindi" else "gu"
     try:
-        return translator.translate(text, dest=dest).text
+        return GoogleTranslator(source="auto", target=target).translate(text)
     except:
         return text  # fallback if translation fails
 
