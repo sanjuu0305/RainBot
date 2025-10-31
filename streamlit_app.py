@@ -1,10 +1,30 @@
+
 import streamlit as st
 import requests
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import folium
-from streamlit_folium import st_folium
+from datetime import datetime
+
+# Safe optional imports (folium / streamlit_folium). If they fail, app stays up.
+_have_folium = False
+try:
+    import folium
+    from streamlit_folium import st_folium
+    _have_folium = True
+except Exception as e:
+    st.warning("Map feature disabled (folium not available). Check requirements.txt and logs.")
+    # also log to server logs
+    st.write(f":information_source: Folium import error (see logs): {e}")
+
+# Example usage later:
+if _have_folium:
+    # build and show map safely
+    m = folium.Map(location=[23.03, 72.58], zoom_start=7)
+    folium.Marker([23.03, 72.58], popup="Ahmedabad").add_to(m)
+    st.subheader("📍 Rain Intensity Map")
+    st_folium(m, width=700, height=450)
+else:
+    st.info("Map is unavailable. Please check `requirements.txt` or restart the app.")
 
 # ----------------- App Setup -----------------
 st.set_page_config(page_title="🌦️ Rain Forecast Pro", layout="wide", page_icon="☔")
