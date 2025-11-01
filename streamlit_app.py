@@ -18,7 +18,7 @@ except Exception as e:
     _folium_import_error = e
 
 # ----------------- Sidebar: Language Selector -----------------
-st.sidebar.header("🌐 Choose language / भाषा પસંદ કરો")
+st.sidebar.header("🌐 Choose language / ભાષા પસંદ કરો")
 language = st.sidebar.selectbox("Language", ["English", "Hindi", "Gujarati"])
 
 def translate_text(text):
@@ -155,27 +155,84 @@ if city:
         color = "green"
     st.markdown(f"<div style='padding:10px;border-radius:6px;background-color:#f7fbff'><b style='color:{color}'>{flood_text}</b></div>", unsafe_allow_html=True)
 
-    # Map: folium if available, else st.map
-    st.subheader(translate_text("📍 Map View"))
+    # ----------------- Radar & overlay map (RainViewer + OpenWeatherMap tiles) -----------------
+    st.subheader(translate_text("📡 Radar / Layers", language))
+    st.write(translate_text("Tip: use the layer control to toggle overlays.", language))
+
     if _have_folium:
+        # 1) Fetch available radar timestamps from RainViewer
         try:
-            m = folium.Map(location=[lat, lon], zoom_start=9)
-            folium.Marker([lat, lon], popup=city, tooltip=city).add_to(m)
-            # Add OWM precipitation tiles (requires api_key)
-            folium.raster_layers.TileLayer(
-                tiles=f"https://tile.openweathermap.org/map/precipitation_new/{{z}}/{{x}}/{{y}}.png?appid={api_key}",
-                attr="OpenWeatherMap precipitation", name="Precipitation", opacity=0.5
-            ).add_to(m)
+            rv_info = requests.get("https://api.rainviewer.com/public/maps.json", timeout=8).json()
+            timestamps = rv_info.get("radar", {}).get("past", [])
+            rv_times = [int(t) for t in timestamps] if timestamps else []
+        except Exception:
+            rv_info = None
+            rv_times = []
+
+        # 2) UI controls: choose overlay layer and (if radar) choose time index
+        layer_choice = st.selectbox(
+            translate_text("Select map layer", language),
+            ["None", "RainViewer Radar", "OWM Precipitation", "OWM Clouds"]
+        )
+
+        # If RainViewer selected, let user pick a time frame (latest by default)
+        if layer_choice == "RainViewer Radar" and rv_times:
+            idx = st.slider(
+                translate_text("Radar frame (past)", language),
+                min_value=0, max_value=len(rv_times)-1, value=len(rv_times)-1, step=1
+            )
+            selected_time = rv_times[idx]
+        else:
+            selected_time = None
+
+        # 3) Build folium map and add base + overlays
+        try:
+            m = folium.Map(location=[lat, lon], zoom_start=8, control_scale=True)
+            folium.TileLayer("cartodbpositron", name="Base Map").add_to(m)
+
+            # OpenWeatherMap tiles (requires api_key)
+            owm_key = api_key  # ensure this is set earlier in your app
+            if layer_choice == "OWM Precipitation" and owm_key:
+                folium.raster_layers.TileLayer(
+                    tiles=f"https://tile.openweathermap.org/map/precipitation_new/{{z}}/{{x}}/{{y}}.png?appid={owm_key}",
+                    attr="Precipitation © OpenWeatherMap",
+                    name="OWM Precipitation",
+                    opacity=0.6
+                ).add_to(m)
+            if layer_choice == "OWM Clouds" and owm_key:
+                folium.raster_layers.TileLayer(
+                    tiles=f"https://tile.openweathermap.org/map/clouds_new/{{z}}/{{x}}/{{y}}.png?appid={owm_key}",
+                    attr="Clouds © OpenWeatherMap",
+                    name="OWM Clouds",
+                    opacity=0.6
+                ).add_to(m)
+
+            # RainViewer Radar overlay (single time frame)
+            if layer_choice == "RainViewer Radar" and selected_time:
+                folium.raster_layers.TileLayer(
+                    tiles=f"https://tile.rainviewer.com/v2/radar/{selected_time}/{{z}}/{{x}}/{{y}}.png",
+                    attr="Radar © RainViewer",
+                    name=f"RainViewer Radar ({datetime.utcfromtimestamp(selected_time).strftime('%Y-%m-%d %H:%M UTC')})",
+                    opacity=0.6
+                ).add_to(m)
+
+            # Add marker for the chosen location
+            folium.CircleMarker([lat, lon], radius=6, color="blue", fill=True, fill_opacity=0.9, popup=city).add_to(m)
+
+            # Layer control to toggle overlays
             folium.LayerControl().add_to(m)
-            st_folium(m, width=800, height=450)
+
+            # Render in Streamlit
+            st_data = st_folium(m, width=800, height=450)
         except Exception as e:
-            st.info(translate_text("Map failed to render; showing basic map instead."))
+            st.warning(translate_text("Map could not be rendered. Showing basic map instead."))
+            st.write(f":information_source: Map error: {e}")
             st.map(pd.DataFrame({"lat":[lat],"lon":[lon]}))
     else:
-        # fallback
-        st.map(pd.DataFrame({"lat":[lat],"lon":[lon]}))
+        st.info(translate_text("Map feature disabled. Please install 'folium' and 'streamlit-folium'."))
         if _folium_import_error:
-            st.info(translate_text("To enable a nicer map add 'folium' and 'streamlit-folium' to requirements."))
+            st.write(f":information_source: Folium import error: {_folium_import_error}")
+        st.map(pd.DataFrame({"lat":[lat],"lon":[lon]}))
 
     # ----------------- Telegram alert (optional) -----------------
     st.subheader(translate_text("📲 Rain Alert (Telegram)"))
