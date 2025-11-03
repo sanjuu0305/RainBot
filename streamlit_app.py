@@ -21,15 +21,21 @@ except Exception as e:
 st.sidebar.header("🌐 Choose language / ભાષા પસંદ કરો")
 language = st.sidebar.selectbox("Language", ["English", "Hindi", "Gujarati"])
 
-def translate_text(text):
-    """Translate short UI text using deep-translator (Google)."""
-    if language == "English":
+def translate_text(text, lang=None):
+    """
+    Translate short UI text using deep-translator (Google).
+    Accepts an optional lang argument; defaults to the global `language`.
+    If translation fails, returns the original text.
+    """
+    if lang is None:
+        lang = language
+    if lang == "English":
         return text
-    target = "hi" if language == "Hindi" else "gu"
+    target = "hi" if lang == "Hindi" else "gu"
     try:
         return GoogleTranslator(source="auto", target=target).translate(text)
     except Exception:
-        # if translation fails, return original text
+        # fallback: return original text
         return text
 
 # ----------------- Header -----------------
@@ -156,8 +162,8 @@ if city:
     st.markdown(f"<div style='padding:10px;border-radius:6px;background-color:#f7fbff'><b style='color:{color}'>{flood_text}</b></div>", unsafe_allow_html=True)
 
     # ----------------- Radar & overlay map (RainViewer + OpenWeatherMap tiles) -----------------
-    st.subheader(translate_text("📡 Radar / Layers", language))
-    st.write(translate_text("Tip: use the layer control to toggle overlays.", language))
+    st.subheader(translate_text("📡 Radar / Layers"))
+    st.write(translate_text("Tip: use the layer control to toggle overlays."))
 
     if _have_folium:
         # 1) Fetch available radar timestamps from RainViewer
@@ -171,14 +177,14 @@ if city:
 
         # 2) UI controls: choose overlay layer and (if radar) choose time index
         layer_choice = st.selectbox(
-            translate_text("Select map layer", language),
+            translate_text("Select map layer"),
             ["None", "RainViewer Radar", "OWM Precipitation", "OWM Clouds"]
         )
 
         # If RainViewer selected, let user pick a time frame (latest by default)
         if layer_choice == "RainViewer Radar" and rv_times:
             idx = st.slider(
-                translate_text("Radar frame (past)", language),
+                translate_text("Radar frame (past)"),
                 min_value=0, max_value=len(rv_times)-1, value=len(rv_times)-1, step=1
             )
             selected_time = rv_times[idx]
@@ -234,33 +240,12 @@ if city:
             st.write(f":information_source: Folium import error: {_folium_import_error}")
         st.map(pd.DataFrame({"lat":[lat],"lon":[lon]}))
 
-    # ----------------- Telegram alert (optional) -----------------
-    st.subheader(translate_text("📲 Rain Alert (Telegram)"))
-    st.write(translate_text("Enter bot token and chat id to send a test alert (optional)."))
-    telegram_token = st.text_input(translate_text("Telegram Bot Token (optional)"), type="password")
-    chat_id = st.text_input(translate_text("Telegram Chat ID (optional)"))
+    # ----------------- (Telegram removed) -----------------
+    # The Telegram alert section has been removed as requested.
+    # If you want another alert channel (email / SMS / webhook), I can add it here.
 
-    def today_rain_value(df_daily):
-        today = datetime.utcnow().date()
-        if today in df_daily["Date"].values:
-            return float(df_daily[df_daily["Date"]==today]["Rain (mm)"].sum())
-        # fallback: nearest day or 0
-        return float(df_daily["Rain (mm)"].iloc[0]) if not df_daily.empty else 0.0
-
-    if st.button(translate_text("Send Test Alert")):
-        if not telegram_token or not chat_id:
-            st.warning(translate_text("Please provide both Telegram token and chat id."))
-        else:
-            rain_today = today_rain_value(df_daily)
-            # translate alert message based on language
-            alert_msg_en = f"🌧️ Rain Alert for {city}! Today's Rain: {rain_today:.2f} mm. Flood Risk: {flood_text}"
-            alert_msg = alert_msg_en if language == "English" else translate_text(alert_msg_en)
-            try:
-                resp = requests.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage",
-                                     data={"chat_id": chat_id, "text": alert_msg}, timeout=10)
-                if resp.status_code == 200:
-                    st.success(translate_text("Alert sent successfully!"))
-                else:
-                    st.error(translate_text("Telegram API error: ") + f"{resp.status_code} - {resp.text}")
-            except Exception as e:
-                st.error(translate_text("Failed to send Telegram message: ") + str(e))
+    # ----------------- Footer / tips -----------------
+    st.markdown("---")
+    st.write(translate_text("Tips:"))
+    st.write("- " + translate_text("For best results, include the correct city name (City, State or City, Country)."))
+    st.write("- " + translate_text("Use the map layers to visualize radar & precipitation overlays."))
