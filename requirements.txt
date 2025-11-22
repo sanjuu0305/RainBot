@@ -1,28 +1,17 @@
 streamlit
-requests
 pandas
+requests
 plotly
 deep-translator
 
-# Voice dependencies
+# Voice
 gTTS
 SpeechRecognition
 pydub
-
-# Required for pydub audio conversion
-ffmpeg-python
 
 # Maps
 folium
 streamlit-folium
 
-# Misc
+# (Optional but safe)
 python-dotenv
-
-streamlit
-requests
-pandas
-plotly
-deep-translator
-folium
-streamlit-folium
