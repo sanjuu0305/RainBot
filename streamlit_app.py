@@ -1,4 +1,5 @@
 # farmer_advisor_voice.py
+
 import streamlit as st
 st.set_page_config(page_title="🌦️ Rain Forecast Pro (Voice)", layout="wide", page_icon="☔")
 
@@ -36,7 +37,7 @@ try:
 except Exception as e:
     _pydub_error = e
 
-# ----------------- Optional Folium -----------------
+# ----------------- Optional Folium Maps -----------------
 _have_folium = False
 _folium_import_error = None
 try:
@@ -46,12 +47,11 @@ try:
 except Exception as e:
     _folium_import_error = e
 
-# ----------------- Sidebar: Language Selector -----------------
+# ----------------- Sidebar Language Selector -----------------
 st.sidebar.header("🌐 Choose language / ભાષા પસંદ કરો")
 language = st.sidebar.selectbox("Language", ["English", "Hindi", "Gujarati"])
 
 def translate_text(text, lang=None):
-    """Translate UI text using deep-translator"""
     if lang is None:
         lang = language
     if lang == "English":
@@ -70,7 +70,6 @@ st.markdown(translate_text("Enter your city name to see past & forecast rainfall
 api_key = st.secrets.get("openweather_api_key", "")
 if not api_key:
     st.error(translate_text("API key missing. Add 'openweather_api_key' in Streamlit Secrets."))
-    st.info('Example (Streamlit Secrets):\n\nopenweather_api_key = "your_openweathermap_api_key_here"')
     st.stop()
 
 # ----------------- Input -----------------
@@ -87,13 +86,11 @@ def geocode_city(city_name):
         data = r.json()
         if not data:
             return None, None, "No geocoding result"
-        lat = data[0]["lat"]
-        lon = data[0]["lon"]
-        return lat, lon, None
-    except requests.exceptions.RequestException as e:
+        return data[0]["lat"], data[0]["lon"], None
+    except Exception as e:
         return None, None, f"Network/geocode error: {e}"
 
-# ----------------- Fetch Forecast -----------------
+# ----------------- Forecast API -----------------
 def fetch_forecast_by_latlon(lat, lon):
     url = "https://api.openweathermap.org/data/2.5/forecast"
     params = {"lat": lat, "lon": lon, "appid": api_key, "units": "metric"}
@@ -102,7 +99,7 @@ def fetch_forecast_by_latlon(lat, lon):
         if r.status_code != 200:
             return None, f"Forecast API error {r.status_code}: {r.text}"
         return r.json(), None
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         return None, f"Network/forecast error: {e}"
 
 # ----------------- Build Forecast DataFrame -----------------
@@ -111,56 +108,49 @@ def build_forecast_df(forecast_json):
     rows = []
     for it in items:
         dt = datetime.fromtimestamp(it.get("dt", 0))
-        temp = it.get("main", {}).get("temp")
-        hum = it.get("main", {}).get("humidity")
-        rain = it.get("rain", {}).get("3h", 0.0) if it.get("rain") else 0.0
-        cond = it.get("weather", [{}])[0].get("description", "").capitalize()
-        wind = round(it.get("wind", {}).get("speed", 0.0) * 3.6, 1)
         rows.append({
             "Datetime": dt,
             "Date": dt.date(),
-            "Temperature (°C)": temp,
-            "Humidity (%)": hum,
-            "Rain (mm)": rain,
-            "Condition": cond,
-            "Wind (km/h)": wind
+            "Temperature (°C)": it.get("main", {}).get("temp"),
+            "Humidity (%)": it.get("main", {}).get("humidity"),
+            "Rain (mm)": it.get("rain", {}).get("3h", 0.0),
+            "Condition": it.get("weather", [{}])[0].get("description", "").capitalize(),
+            "Wind (km/h)": round(it.get("wind", {}).get("speed", 0.0) * 3.6, 1)
         })
-    df = pd.DataFrame(rows)
-    return df
+    return pd.DataFrame(rows)
 
-# ----------------- Farmer Advisory -----------------
+# ----------------- Farmer Advice Logic -----------------
 def compose_advice(today_rain, avg_temp, avg_hum):
     if today_rain > 30:
-        advice = "Heavy rain expected — avoid fertilizer application, secure harvested crops and livestock, and ensure drainage is clear."
+        advice = "Heavy rain expected — avoid fertilizer application, secure harvested crops, and ensure drainage."
     elif today_rain > 10:
         advice = "Moderate rain expected — delay irrigation and spraying; prepare drainage."
     elif today_rain > 0:
-        advice = "Light rain expected — minimal irrigation needed; cover sensitive crops if forecast shows heavier rain later."
+        advice = "Light rain expected — minimal irrigation needed."
     else:
         advice = "No rain expected — schedule irrigation and fertilizer application on dry day."
 
-    if avg_temp is not None:
+    if avg_temp:
         if avg_temp > 35:
             advice += " High temperatures — apply mulch and irrigate during cooler hours."
         elif avg_temp < 20:
             advice += " Cooler weather — suitable for sowing wheat and mustard."
 
-    if avg_hum is not None and avg_hum > 85:
-        advice += " High humidity — monitor for fungal diseases and consider protective treatments."
+    if avg_hum and avg_hum > 85:
+        advice += " High humidity — monitor for fungal diseases."
+
     return advice
 
-# ----------------- Text-to-Speech -----------------
+# ----------------- Text-To-Speech -----------------
 def text_to_speech(text, lang_code):
     if not _have_gtts:
         raise RuntimeError(f"gTTS not available: {_gtts_error}")
     tts = gTTS(text=text, lang=lang_code)
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    tmp_name = tmp.name
-    tmp.close()
-    tts.save(tmp_name)
-    return tmp_name
+    tts.save(tmp.name)
+    return tmp.name
 
-# ----------------- Speech-to-Text -----------------
+# ----------------- Speech-To-Text -----------------
 def transcribe_audio(uploaded_file):
     if not _have_speech_recognition:
         return None, f"SpeechRecognition not available: {_sr_error}"
@@ -171,213 +161,147 @@ def transcribe_audio(uploaded_file):
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as f:
             f.write(uploaded_file.read())
             src_path = f.name
-    except Exception as e:
-        return None, f"Failed to save upload: {e}"
+    except:
+        return None, "File save error"
 
     try:
         audio = AudioSegment.from_file(src_path)
         wav_path = src_path + ".wav"
         audio.export(wav_path, format="wav")
     except Exception as e:
-        return None, f"Audio conversion failed (ffmpeg required): {e}"
+        return None, f"Audio conversion failed: {e}"
 
     recognizer = sr.Recognizer()
     try:
         with sr.AudioFile(wav_path) as source:
             audio_data = recognizer.record(source)
-        sr_lang = "en-US"
-        if language == "Hindi":
-            sr_lang = "hi-IN"
-        elif language == "Gujarati":
-            sr_lang = "gu-IN"
-        text = recognizer.recognize_google(audio_data, language=sr_lang)
+
+        lang_map = {"English":"en-US","Hindi":"hi-IN","Gujarati":"gu-IN"}
+        text = recognizer.recognize_google(audio_data, language=lang_map.get(language, "en-US"))
         return text, None
     except Exception as e:
         return None, f"Transcription error: {e}"
     finally:
         try:
             os.remove(src_path)
-            if os.path.exists(wav_path):
-                os.remove(wav_path)
-        except Exception:
+            os.remove(wav_path)
+        except:
             pass
 
-# ----------------- Main Flow -----------------
+# -------------------------------------------------------
+#                      MAIN APP
+# -------------------------------------------------------
+
 if city:
+    # ---- Geocode ----
     with st.spinner(translate_text("Finding location...")):
         lat, lon, geo_err = geocode_city(city)
     if geo_err:
-        st.error(translate_text("City not found or geocode failed: ") + f"{geo_err}")
+        st.error(translate_text("City not found: ") + geo_err)
         st.stop()
 
+    # ---- Forecast ----
     with st.spinner(translate_text("Fetching forecast...")):
         forecast_json, forecast_err = fetch_forecast_by_latlon(lat, lon)
     if forecast_err:
-        st.error(translate_text("Could not fetch forecast: ") + f"{forecast_err}")
+        st.error(translate_text("Could not fetch forecast: ") + forecast_err)
         st.stop()
 
     df = build_forecast_df(forecast_json)
     if df.empty:
-        st.error(translate_text("No forecast data available."))
+        st.error(translate_text("No forecast data found."))
         st.stop()
 
-    # Hourly chart
-    st.subheader(translate_text("🕒 Hourly Rain & Temperature (3-hour steps)"))
-    fig_h = go.Figure()
-    fig_h.add_trace(go.Bar(x=df["Datetime"], y=df["Rain (mm)"], name=translate_text("Rain (mm)"), marker_color="skyblue"))
-    fig_h.add_trace(go.Scatter(x=df["Datetime"], y=df["Temperature (°C)"], name=translate_text("Temperature (°C)"),
-                               mode="lines+markers", yaxis="y2"))
-    fig_h.update_layout(title=translate_text("Hourly Rain & Temperature"),
-                        xaxis_title=translate_text("Time"),
-                        yaxis=dict(title=translate_text("Rain (mm)")),
-                        yaxis2=dict(title=translate_text("Temperature (°C)"), overlaying="y", side="right"))
-    st.plotly_chart(fig_h, use_container_width=True)
+    # ----------------- Charts -----------------
+    st.subheader(translate_text("🕒 Hourly Rain & Temperature"))
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=df["Datetime"], y=df["Rain (mm)"], name="Rain (mm)", marker_color="skyblue"))
+    fig.add_trace(go.Scatter(x=df["Datetime"], y=df["Temperature (°C)"],
+                             name="Temperature (°C)", yaxis="y2"))
+    fig.update_layout(
+        yaxis2=dict(overlaying="y", side="right", title="Temperature (°C)")
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-    # Daily summary
+    # ----------------- Daily Summary -----------------
     st.subheader(translate_text("📊 Daily Rain Summary"))
-    df_daily = df.groupby("Date").agg({
-        "Rain (mm)": "sum",
-        "Temperature (°C)": "mean",
-        "Humidity (%)": "mean"
-    }).reset_index().sort_values("Date")
-    st.dataframe(df_daily, use_container_width=True)
+    df_daily = df.groupby("Date").agg({"Rain (mm)": "sum", 
+                                       "Temperature (°C)": "mean", 
+                                       "Humidity (%)": "mean"}).reset_index()
+    st.dataframe(df_daily)
 
-    # Flood risk
-    st.subheader(translate_text("💧 Flood Risk Index"))
-    avg_rain = float(df_daily["Rain (mm)"].mean()) if not df_daily.empty else 0.0
-    avg_hum = float(df_daily["Humidity (%)"].mean()) if not df_daily.empty else 0.0
+    # ----------------- Flood Risk -----------------
+    avg_rain = df_daily["Rain (mm)"].mean()
+    avg_hum = df_daily["Humidity (%)"].mean()
+
     if avg_rain > 20 and avg_hum > 80:
         flood_text, color = translate_text("HIGH — Flood risk possible"), "red"
     elif avg_rain > 10 and avg_hum > 70:
         flood_text, color = translate_text("MEDIUM — Watch updates"), "orange"
     else:
         flood_text, color = translate_text("LOW — No flood risk"), "green"
-    st.markdown(f"<div style='padding:10px;border-radius:6px;background-color:#f7fbff'><b style='color:{color}'>{flood_text}</b></div>", unsafe_allow_html=True)
 
-    # Farmer Advisory
+    st.markdown(f"<div style='padding:10px;border-radius:6px;background-color:#eef'><b style='color:{color}'>{flood_text}</b></div>", unsafe_allow_html=True)
+
+    # ----------------- Farmer Advisory -----------------
     st.subheader(translate_text("🤖 Farmer Advisory Assistant"))
-    today_rain = float(df_daily.iloc[0]["Rain (mm)"]) if not df_daily.empty else 0.0
-    avg_temp = float(df_daily["Temperature (°C)"].mean()) if not df_daily.empty else None
-    avg_hum = float(df_daily["Humidity (%)"].mean()) if not df_daily.empty else None
-    advice_text = compose_advice(today_rain, avg_temp, avg_hum)
-    st.info(translate_text(advice_text))
+    today_rain = df_daily.iloc[0]["Rain (mm)"]
+    advice = compose_advice(today_rain, df_daily["Temperature (°C)"].mean(), avg_hum)
+    st.info(translate_text(advice))
 
-    # TTS Playback
-    st.subheader(translate_text("🔊 Play Advice (Voice)"))
-    if not _have_gtts:
-        st.warning("TTS (gTTS) not available. Install 'gTTS' to enable voice playback.")
-        if _gtts_error:
-            st.write(f"gTTS error: {_gtts_error}")
-    else:
-        lang_map = {"English": "en", "Hindi": "hi", "Gujarati": "hi"}  # fallback
-        gtts_lang = lang_map.get(language, "en")
+    # ----------------- TTS -----------------
+    st.subheader(translate_text("🔊 Play Advice"))
+    if _have_gtts:
         if st.button(translate_text("Play advice audio")):
-            try:
-                mp3_path = text_to_speech(translate_text(advice_text), gtts_lang)
-                with open(mp3_path, "rb") as f:
-                    audio_bytes = f.read()
-                st.audio(audio_bytes, format="audio/mp3")
-                os.remove(mp3_path)  # cleanup
-            except Exception as e:
-                st.error(f"TTS error: {e}")
+            lang_map = {"English": "en", "Hindi": "hi", "Gujarati": "gu"}
+            path = text_to_speech(translate_text(advice), lang_map.get(language, "en"))
+            st.audio(open(path, "rb").read(), format="audio/mp3")
+    else:
+        st.warning("gTTS unavailable")
 
-    # STT Upload
-    st.subheader(translate_text("🎤 Ask by voice (upload recorded audio)"))
-    st.write(translate_text("Record a short voice note on your phone and upload it here (wav/mp3/m4a)."))
-    uploaded_audio = st.file_uploader(translate_text("Upload voice file (optional)"), type=["wav", "mp3", "m4a", "ogg"])
-
+    # ----------------- STT -----------------
+    st.subheader(translate_text("🎤 Ask by Voice (upload audio)"))
+    upload = st.file_uploader(translate_text("Upload voice file"), type=["wav","mp3","m4a","ogg"])
     transcribed_text = None
-    if uploaded_audio is not None:
-        st.info(translate_text("Processing uploaded audio..."))
-        transcription, trans_err = transcribe_audio(uploaded_audio)
-        if trans_err:
-            st.error(translate_text(trans_err))
+    if upload:
+        text, err = transcribe_audio(upload)
+        if err:
+            st.error(translate_text(err))
         else:
             st.success(translate_text("Transcription:"))
-            st.write(transcription)
-            transcribed_text = transcription
+            st.write(text)
+            transcribed_text = text
 
-    # Mini chat
-    st.write("---")
+    # ----------------- Chat -----------------
     st.subheader(translate_text("💬 Farmer Chat"))
-    user_q = st.text_input(translate_text("Ask the Farmer Bot (or upload voice above)"))
+    user_q = st.text_input(translate_text("Ask the farmer bot:"))
     if not user_q and transcribed_text:
         user_q = transcribed_text
 
     if user_q:
         q = user_q.lower()
-        if "irrigate" in q or "water" in q or "પાણી" in q or "सिंचाई" in q:
-            reply = "If rain is expected soon, delay irrigation. Otherwise irrigate early morning or late evening."
-        elif "fertilizer" in q or "યાવન" in q or "खाद" in q:
-            reply = "Apply fertilizers on dry days and avoid doing so before heavy rain."
-        elif "disease" in q or "રોગ" in q or "रोग" in q:
-            reply = "High humidity raises disease risk — monitor crops and apply protective measures if necessary."
-        elif "harvest" in q or "કાપણી" in q or "कटाई" in q:
-            reply = "Harvest on dry days; avoid harvesting during or immediately after heavy rain."
+        if any(x in q for x in ["irrigate", "water", "પાણી", "सिंचाई"]):
+            reply = "If rain is expected, delay irrigation."
+        elif any(x in q for x in ["fertilizer", "ખાતર", "खाद"]):
+            reply = "Apply fertilizers only on dry days."
+        elif any(x in q for x in ["disease", "રોગ", "रोग"]):
+            reply = "High humidity increases disease risk."
+        elif any(x in q for x in ["harvest", "કાપણી", "कटाई"]):
+            reply = "Harvest only on dry days."
         else:
-            reply = "Weather looks moderate. Follow the provided advisory and re-check the forecast tomorrow."
+            reply = "Follow today's advisory and check tomorrow’s forecast."
         st.success(translate_text(reply))
 
-    # Radar / Map
-    st.subheader(translate_text("📡 Radar / Layers"))
-    st.write(translate_text("Tip: use the layer control to toggle overlays."))
-
+    # ----------------- Maps -----------------
+    st.subheader(translate_text("📡 Weather Radar"))
     if _have_folium:
         try:
-            rv_info = requests.get("https://api.rainviewer.com/public/maps.json", timeout=8).json()
-            timestamps = rv_info.get("radar", {}).get("past", [])
-            rv_times = [int(t) for t in timestamps] if timestamps else []
-        except Exception:
-            rv_times = []
-
-        layer_choice = st.selectbox(
-            translate_text("Select map layer"),
-            ["None", "RainViewer Radar", "OWM Precipitation", "OWM Clouds"]
-        )
-
-        selected_time = None
-        if layer_choice == "RainViewer Radar" and rv_times:
-            idx = st.slider(translate_text("Radar frame (past)"),
-                            min_value=0, max_value=len(rv_times)-1, value=len(rv_times)-1)
-            selected_time = rv_times[idx]
-
-        try:
-            m = folium.Map(location=[lat, lon], zoom_start=8, control_scale=True)
-            folium.TileLayer("cartodbpositron", name="Base Map").add_to(m)
-            owm_key = api_key
-            if layer_choice == "OWM Precipitation":
-                folium.raster_layers.TileLayer(
-                    tiles=f"https://tile.openweathermap.org/map/precipitation_new/{{z}}/{{x}}/{{y}}.png?appid={owm_key}",
-                    attr="Precipitation © OpenWeatherMap", name="OWM Precipitation", opacity=0.6
-                ).add_to(m)
-            if layer_choice == "OWM Clouds":
-                folium.raster_layers.TileLayer(
-                    tiles=f"https://tile.openweathermap.org/map/clouds_new/{{z}}/{{x}}/{{y}}.png?appid={owm_key}",
-                    attr="Clouds © OpenWeatherMap", name="OWM Clouds", opacity=0.6
-                ).add_to(m)
-            if layer_choice == "RainViewer Radar" and selected_time:
-                folium.raster_layers.TileLayer(
-                    tiles=f"https://tile.rainviewer.com/v2/radar/{selected_time}/{{z}}/{{x}}/{{y}}.png",
-                    attr="Radar © RainViewer",
-                    name=f"Radar ({datetime.utcfromtimestamp(selected_time).strftime('%Y-%m-%d %H:%M UTC')})",
-                    opacity=0.6
-                ).add_to(m)
-            folium.CircleMarker([lat, lon], radius=6, color="blue", fill=True, popup=city).add_to(m)
-            folium.LayerControl().add_to(m)
-            st_folium(m, width=800, height=450)
+            m = folium.Map(location=[lat, lon], zoom_start=8)
+            folium.Marker([lat, lon], popup=city).add_to(m)
+            st_folium(m, width=700, height=400)
         except Exception as e:
-            st.warning(translate_text("Map could not be rendered. Showing basic map instead."))
-            st.write(f":information_source: Map error: {e}")
-            if lat is not None and lon is not None:
-                st.map(pd.DataFrame({"lat":[lat],"lon":[lon]}))
-    else:
-        st.info(translate_text("Map feature disabled. Please install 'folium' and 'streamlit-folium'."))
-        if _folium_import_error:
-            st.write(f":information_source: Folium import error: {_folium_import_error}")
-        if lat is not None and lon is not None:
+            st.warning("Map failed")
             st.map(pd.DataFrame({"lat":[lat],"lon":[lon]}))
+    else:
+        st.info("Install Folium for maps.")
 
-    st.markdown("---")
-    st.write(translate_text("Tips:"))
-    st.write("- " + translate_text("Record a short voice note (10-30s) and upload for quick questions."))
-    st.write("- " + translate_text("Use Play Advice to hear the guidance in your selected language."))
