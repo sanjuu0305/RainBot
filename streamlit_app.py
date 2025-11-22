@@ -1,5 +1,3 @@
-# farmer_advisor_voice.py
-
 import streamlit as st
 st.set_page_config(page_title="🌦️ Rain Forecast Pro (Voice)", layout="wide", page_icon="☔")
 
@@ -64,16 +62,12 @@ def translate_text(text, lang=None):
 
 # ----------------- Header -----------------
 st.title(translate_text("🌦️ Rain Forecast Dashboard"))
-st.markdown(translate_text("Enter your city name to see past & forecast rainfall, flood risk and farmer advice."))
+st.markdown(translate_text("Enter your city name to see past & forecast rainfall, cold/hot extremes, flood risk and farmer advice."))
 
 # ----------------- City Input -----------------
 city = st.text_input(translate_text("Enter city name:"), "Ahmedabad")
 
-# ==========================================================
-#                 Open-Meteo (FREE, NO API KEY)
-# ==========================================================
-
-# ----------------- Geocoding (Open-Meteo) -----------------
+# ----------------- Open-Meteo Geocoding -----------------
 def geocode_city(city_name):
     url = "https://geocoding-api.open-meteo.com/v1/search"
     params = {"name": city_name, "count": 1}
@@ -90,7 +84,7 @@ def geocode_city(city_name):
     except Exception as e:
         return None, None, f"Network error: {e}"
 
-# ----------------- Weather Forecast (Open-Meteo) -----------------
+# ----------------- Open-Meteo Forecast -----------------
 def fetch_forecast(lat, lon):
     url = (
         "https://api.open-meteo.com/v1/forecast"
@@ -107,7 +101,7 @@ def fetch_forecast(lat, lon):
     except Exception as e:
         return None, f"Network error: {e}"
 
-# ----------------- Build Hourly DataFrame -----------------
+# ----------------- Build DataFrames -----------------
 def build_hourly_df(js):
     hourly = js.get("hourly", {})
     times = hourly.get("time", [])
@@ -124,7 +118,6 @@ def build_hourly_df(js):
         })
     return pd.DataFrame(rows)
 
-# ----------------- Build Daily Summary -----------------
 def build_daily_df(js):
     daily = js.get("daily", {})
     rows = []
@@ -139,9 +132,7 @@ def build_daily_df(js):
         })
     return pd.DataFrame(rows)
 
-# ==========================================================
-#                       ADVISORY LOGIC
-# ==========================================================
+# ----------------- Advisory Logic -----------------
 def compose_advice(today_rain, avg_temp, avg_hum):
     if today_rain > 30:
         advice = "Heavy rain expected — avoid fertilizer application, secure harvested crops, and ensure drainage."
@@ -163,9 +154,7 @@ def compose_advice(today_rain, avg_temp, avg_hum):
 
     return advice
 
-# ==========================================================
-#                        TTS & STT
-# ==========================================================
+# ----------------- TTS / STT -----------------
 def text_to_speech(text, lang_code):
     if not _have_gtts:
         raise RuntimeError(f"gTTS missing: {_gtts_error}")
@@ -199,19 +188,17 @@ def transcribe_audio(uploaded_file):
     except Exception as e:
         return None, f"Transcription error: {e}"
 
-# ==========================================================
-#                         MAIN APP
-# ==========================================================
+# ----------------- MAIN APP -----------------
 if city:
 
-    # ---- Geocode ----
+    # Geocode
     with st.spinner(translate_text("Finding location...")):
         lat, lon, err = geocode_city(city)
     if err:
         st.error(translate_text("City not found: ") + err)
         st.stop()
 
-    # ---- Forecast ----
+    # Forecast
     with st.spinner(translate_text("Fetching forecast...")):
         js, err = fetch_forecast(lat, lon)
     if err:
@@ -219,7 +206,9 @@ if city:
         st.stop()
 
     df = build_hourly_df(js)
-    if df.empty:
+    df_daily = build_daily_df(js)
+
+    if df.empty or df_daily.empty:
         st.error(translate_text("No forecast data available."))
         st.stop()
 
@@ -231,15 +220,19 @@ if city:
     fig.update_layout(yaxis2=dict(overlaying="y", side="right", title="Temperature (°C)"))
     st.plotly_chart(fig, use_container_width=True)
 
-    # ----------------- Daily Summary -----------------
-    st.subheader(translate_text("📊 Daily Summary"))
-    df_daily = build_daily_df(js)
-    st.dataframe(df_daily)
+    st.subheader(translate_text("🌡️ Daily Temperature Range"))
+    fig_temp = go.Figure()
+    fig_temp.add_trace(go.Scatter(x=df_daily["Date"], y=df_daily["Temp Max (°C)"], name="Hot (°C)", line=dict(color="red")))
+    fig_temp.add_trace(go.Scatter(x=df_daily["Date"], y=df_daily["Temp Min (°C)"], name="Cold (°C)", line=dict(color="blue")))
+    fig_temp.update_layout(yaxis_title="Temperature (°C)")
+    st.plotly_chart(fig_temp, use_container_width=True)
 
-    # ----------------- Flood Risk -----------------
+    st.subheader(translate_text("📊 Daily Summary"))
+    st.dataframe(df_daily[["Date","Rain (mm)","Temp Min (°C)","Temp Max (°C)","Wind Max (km/h)"]])
+
+    # Flood Risk
     avg_rain = df_daily["Rain (mm)"].mean()
     avg_hum = df["Humidity (%)"].mean()
-
     if avg_rain > 20 and avg_hum > 80:
         risk, color = translate_text("HIGH — Flood risk"), "red"
     elif avg_rain > 10 and avg_hum > 70:
@@ -247,42 +240,41 @@ if city:
     else:
         risk, color = translate_text("LOW — No flood risk"), "green"
 
-    st.markdown(
-        f"<div style='padding:10px;border-radius:6px;background:#eef'><b style='color:{color}'>{risk}</b></div>",
-        unsafe_allow_html=True)
+    st.markdown(f"<div style='padding:10px;border-radius:6px;background:#eef'><b style='color:{color}'>{risk}</b></div>", unsafe_allow_html=True)
 
-    # ----------------- Farmer Advisory -----------------
+    # Farmer Advisory
     st.subheader(translate_text("🤖 Farmer Advisory Assistant"))
     today_rain = df_daily.iloc[0]["Rain (mm)"]
-    advice = compose_advice(today_rain, df_daily["Temp Max (°C)"].mean(), avg_hum)
+    today_cold = df_daily.iloc[0]["Temp Min (°C)"]
+    today_hot = df_daily.iloc[0]["Temp Max (°C)"]
+    advice = compose_advice(today_rain, (today_cold+today_hot)/2, avg_hum)
+    if today_hot > 40: advice += " ⚠️ High heat alert today — protect crops."
+    if today_cold < 10: advice += " ❄️ Cold alert today — protect sensitive crops."
     st.info(translate_text(advice))
 
-    # ----------------- TTS -----------------
+    # TTS
     st.subheader(translate_text("🔊 Play Advice"))
     if _have_gtts and st.button(translate_text("Play advice audio")):
         lang_map = {"English": "en", "Hindi": "hi", "Gujarati": "gu"}
         path = text_to_speech(translate_text(advice), lang_map.get(language, "en"))
         st.audio(open(path, "rb").read(), format="audio/mp3")
 
-    # ----------------- STT -----------------
+    # STT
     st.subheader(translate_text("🎤 Ask by Voice (upload audio)"))
     upload = st.file_uploader(translate_text("Upload voice file"), type=["wav","mp3","m4a","ogg"])
     transcribed_text = None
     if upload:
         text, err = transcribe_audio(upload)
-        if err:
-            st.error(translate_text(err))
+        if err: st.error(translate_text(err))
         else:
             st.success(translate_text("Transcription:"))
             st.write(text)
             transcribed_text = text
 
-    # ----------------- Simple Chat -----------------
+    # Simple Chat
     st.subheader(translate_text("💬 Farmer Chat"))
     query = st.text_input(translate_text("Ask the farmer bot:"))
-    if not query and transcribed_text:
-        query = transcribed_text
-
+    if not query and transcribed_text: query = transcribed_text
     if query:
         q = query.lower()
         if "irrig" in q or "પાણી" in q or "सिंचाई" in q:
@@ -295,7 +287,7 @@ if city:
             ans = "Follow today's advisory and monitor forecast."
         st.success(translate_text(ans))
 
-    # ----------------- Radar Map (RainViewer) -----------------
+    # Radar Map (RainViewer)
     st.subheader(translate_text("📡 Weather Radar (RainViewer)"))
     if _have_folium:
         try:
@@ -315,7 +307,7 @@ if city:
                 ).add_to(m)
 
             st_folium(m, width=700, height=400)
-        except Exception as e:
+        except Exception:
             st.warning("Map failed to load. Showing simple map.")
             st.map(pd.DataFrame({"lat": [lat], "lon": [lon]}))
     else:
