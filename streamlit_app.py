@@ -243,7 +243,7 @@ if city:
     st.markdown(f"<div style='padding:10px;border-radius:6px;background:#eef'><b style='color:{color}'>{risk}</b></div>", unsafe_allow_html=True)
 
     # Farmer Advisory
-    st.subheader(translate_text("🤖 Farmer Advisory Assistant"))
+    st.subheader(translate_text("🤖 RainBot Advisory Assistant"))
     today_rain = df_daily.iloc[0]["Rain (mm)"]
     today_cold = df_daily.iloc[0]["Temp Min (°C)"]
     today_hot = df_daily.iloc[0]["Temp Max (°C)"]
@@ -272,8 +272,8 @@ if city:
             transcribed_text = text
 
     # Simple Chat
-    st.subheader(translate_text("💬 Farmer Chat"))
-    query = st.text_input(translate_text("Ask the farmer bot:"))
+    st.subheader(translate_text("💬 RainBot Chat"))
+    query = st.text_input(translate_text("Ask the Rain bot:"))
     if not query and transcribed_text: query = transcribed_text
     if query:
         q = query.lower()
