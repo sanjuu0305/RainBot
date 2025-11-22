@@ -1,14 +1,28 @@
-streamlit>=1.25.0,<2.0
-requests>=2.31.0
-pandas>=2.1.0
-plotly>=5.16.0
-deep-translator>=1.12.1
-gTTS>=2.3.2
-SpeechRecognition>=3.9.0
-pydub>=0.27.0
-folium>=0.19.0
-streamlit-folium>=0.11.0
-rich>=13.3.0
-markdown-it-py>=2.2.0
-mdurl>=0.1.2
-pygments>=2.19.2
+streamlit
+requests
+pandas
+plotly
+deep-translator
+
+# Voice dependencies
+gTTS
+SpeechRecognition
+pydub
+
+# Required for pydub audio conversion
+ffmpeg-python
+
+# Maps
+folium
+streamlit-folium
+
+# Misc
+python-dotenv
+
+streamlit
+requests
+pandas
+plotly
+deep-translator
+folium
+streamlit-folium
